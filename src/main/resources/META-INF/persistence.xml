@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<persistence xmlns="http://java.sun.com/xml/ns/persistence"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:schemaLocation="http://java.sun.com/xml/ns/persistence
+                 http://java.sun.com/xml/ns/persistence/persistence_2_0.xsd"
+             version="2.0">
+    <persistence-unit name="searchengine">
+        <!-- Указываем все классы сущностей, например Site и Page -->
+        <class>searchengine.model.Site</class>
+        <class>searchengine.model.Page</class>
+        <properties>
+            <!-- Настройки подключения к базе данных -->
+            <property name="javax.persistence.jdbc.url" value="jdbc:mysql://localhost:3306/search_engine"/>
+            <property name="javax.persistence.jdbc.user" value="root"/>
+            <property name="javax.persistence.jdbc.password" value="asuzncmi666"/>
+            <property name="javax.persistence.jdbc.driver" value="com.mysql.cj.jdbc.Driver"/>
+            <property name="hibernate.dialect" value="org.hibernate.dialect.MySQLDialect"/>
+            <property name="hibernate.hbm2ddl.auto" value="update"/> <!-- Автоматическое обновление схемы -->
+            <property name="hibernate.show_sql" value="true"/> <!-- Показ SQL-запросов -->
+        </properties>
+    </persistence-unit>
+</persistence>
