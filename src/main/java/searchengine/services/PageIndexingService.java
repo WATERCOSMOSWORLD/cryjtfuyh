@@ -11,9 +11,13 @@ import searchengine.config.SitesList;
 import searchengine.config.ConfigSite;
 import searchengine.model.Page;
 import searchengine.model.Site;
+import searchengine.model.Lemma;
+import searchengine.model.Index;
 import searchengine.model.IndexingStatus;
 import searchengine.repository.PageRepository;
+import searchengine.repository.LemmaRepository;
 import searchengine.repository.SiteRepository;
+import searchengine.repository.IndexRepository;
 import org.jsoup.Connection;
 import org.springframework.beans.factory.annotation.Autowired;
 import java.util.Random;
@@ -24,6 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.apache.lucene.morphology.LuceneMorphology;
+import org.apache.lucene.morphology.russian.RussianLuceneMorphology;
+import org.apache.lucene.morphology.english.EnglishLuceneMorphology;
 
 @Service
 public class PageIndexingService {
@@ -34,12 +41,16 @@ public class PageIndexingService {
     private final SitesList sitesList;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
+    private final LemmaRepository lemmaRepository;
+    private final IndexRepository indexRepository;
 
     @Autowired
-    public PageIndexingService(SitesList sitesList, SiteRepository siteRepository, PageRepository pageRepository) {
+    public PageIndexingService(SitesList sitesList,IndexRepository indexRepository,LemmaRepository lemmaRepository, SiteRepository siteRepository, PageRepository pageRepository) {
         this.sitesList = sitesList;
         this.siteRepository = siteRepository;
+        this.lemmaRepository = lemmaRepository;
         this.pageRepository = pageRepository;
+        this.indexRepository = indexRepository;
     }
 
     // Проверка, входит ли URL в список настроенных сайтов
@@ -145,11 +156,11 @@ public class PageIndexingService {
             String path = getPathFromUrl(url);
             int statusCode = response.statusCode();
 
-            // Проверка, существует ли уже такая страница для данного сайта
+            // Проверка, существует ли уже такая страница
             Optional<Page> existingPage = pageRepository.findBySiteAndPath(site, path);
             if (existingPage.isPresent()) {
                 System.out.println("Страница уже существует: " + url);
-                return; // Не сохраняем, если такая страница уже есть
+                return;
             }
 
             Page page = new Page();
@@ -158,13 +169,95 @@ public class PageIndexingService {
             page.setCode(statusCode);
             page.setContent(content);
             page.setContentType(contentType);
-
             pageRepository.save(page);
+
             System.out.println("Сохранено содержимое: " + url);
+
+            // **Обрабатываем текст страницы**
+            processPageContent(page);
+
         } catch (Exception e) {
             System.err.println("Ошибка сохранения содержимого: " + url + " - " + e.getMessage());
         }
     }
+
+    private void processPageContent(Page page) {
+        try {
+            // Парсим HTML с помощью Jsoup
+            Document document = Jsoup.parse(page.getContent());
+            String text = document.body().text(); // Извлекаем текст страницы
+
+            // **Лемматизация текста**
+            Map<String, Integer> lemmaCounts = lemmatizeText(text);
+
+            for (Map.Entry<String, Integer> entry : lemmaCounts.entrySet()) {
+                String lemmaText = entry.getKey();
+                int count = entry.getValue();
+
+                // **Обновление таблицы lemma**
+                Lemma lemma = lemmaRepository.findByLemma(lemmaText)
+                        .orElseGet(() -> {
+                            Lemma newLemma = new Lemma();
+                            newLemma.setLemma(lemmaText);
+                            newLemma.setFrequency(0);
+                            newLemma.setSite(page.getSite()); // Добавляем сайт
+                            return newLemma;
+                        });
+
+                lemma.setFrequency(lemma.getFrequency() + 1);
+                lemmaRepository.save(lemma);
+
+                // **Связываем с index**
+                Index index = new Index();
+                index.setPage(page);
+                index.setLemma(lemma);
+                index.setRank((float) count);
+                indexRepository.save(index);
+
+                // Логирование сохраненных лемм
+                System.out.println("Сохранена лемма: " + lemmaText + " (Частота: " + lemma.getFrequency() + ")");
+            }
+
+            System.out.println("Обработана страница: " + page.getPath());
+
+        } catch (Exception e) {
+            System.err.println("Ошибка обработки страницы: " + page.getPath() + " - " + e.getMessage());
+        }
+    }
+
+
+    private Map<String, Integer> lemmatizeText(String text) {
+        Map<String, Integer> lemmaCounts = new HashMap<>();
+        try {
+            LuceneMorphology russianMorphology = new RussianLuceneMorphology();
+            LuceneMorphology englishMorphology = new EnglishLuceneMorphology();
+
+            // Разделяем текст на слова
+            String[] words = text.toLowerCase().replaceAll("[^a-zа-я]", " ").split("\\s+");
+            for (String word : words) {
+                if (word.isBlank()) continue;
+
+                List<String> normalForms;
+                if (word.matches(".*[а-я].*")) { // Если слово содержит русские буквы
+                    normalForms = russianMorphology.getNormalForms(word);
+                } else { // В остальных случаях считаем его английским
+                    normalForms = englishMorphology.getNormalForms(word);
+                }
+
+                for (String lemma : normalForms) {
+                    lemmaCounts.put(lemma, lemmaCounts.getOrDefault(lemma, 0) + 1);
+                }
+
+                // Логируем результаты лемматизации
+                System.out.println("Слово: " + word + " -> Леммы: " + normalForms);
+            }
+        } catch (Exception e) {
+            System.err.println("Ошибка лемматизации: " + e.getMessage());
+        }
+        return lemmaCounts;
+    }
+
+
 
 
     private boolean isSupportedContentType(String url, String contentType) {
@@ -246,5 +339,4 @@ public class PageIndexingService {
             System.out.println("Удалён сайт с URL: " + site.getUrl());
         }
     }
-
 }
