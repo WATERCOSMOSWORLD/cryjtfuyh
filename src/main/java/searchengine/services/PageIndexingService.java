@@ -156,13 +156,26 @@ public class PageIndexingService {
             String path = getPathFromUrl(url);
             int statusCode = response.statusCode();
 
-            // Проверка, существует ли уже такая страница
             Optional<Page> existingPage = pageRepository.findBySiteAndPath(site, path);
             if (existingPage.isPresent()) {
-                System.out.println("Страница уже существует: " + url);
-                return;
+                Page pageToDelete = existingPage.get();
+
+                // Удаляем индексы
+                int deletedIndexes = indexRepository.deleteByPageId(pageToDelete.getId());
+                System.out.println("Удалено записей из index: " + deletedIndexes);
+
+                // Удаляем страницу
+                pageRepository.delete(pageToDelete);
+                System.out.println("Удалена старая страница: " + url);
+
+                // Очищаем "осиротевшие" леммы
+                int deletedLemmas = lemmaRepository.deleteOrphanLemmas();
+                System.out.println("Удалено неиспользуемых лемм: " + deletedLemmas);
+            } else {
+                System.out.println("Страница не найдена в базе, создаем новую: " + url);
             }
 
+            // Создаём новую страницу
             Page page = new Page();
             page.setSite(site);
             page.setPath(path);
@@ -173,13 +186,15 @@ public class PageIndexingService {
 
             System.out.println("Сохранено содержимое: " + url);
 
-            // **Обрабатываем текст страницы**
+            // Обрабатываем текст страницы
             processPageContent(page);
 
         } catch (Exception e) {
             System.err.println("Ошибка сохранения содержимого: " + url + " - " + e.getMessage());
         }
     }
+
+
 
     private void processPageContent(Page page) {
         try {
@@ -228,36 +243,42 @@ public class PageIndexingService {
 
     private Map<String, Integer> lemmatizeText(String text) {
         Map<String, Integer> lemmaCounts = new HashMap<>();
+
         try {
             LuceneMorphology russianMorphology = new RussianLuceneMorphology();
             LuceneMorphology englishMorphology = new EnglishLuceneMorphology();
 
-            // Разделяем текст на слова
-            String[] words = text.toLowerCase().replaceAll("[^a-zа-я]", " ").split("\\s+");
+            // Разделяем текст на слова (оставляем только буквы)
+            String[] words = text.toLowerCase().split("\\P{L}+");
+
             for (String word : words) {
                 if (word.isBlank()) continue;
 
-                List<String> normalForms;
-                if (word.matches(".*[а-я].*")) { // Если слово содержит русские буквы
+                List<String> normalForms = new ArrayList<>();
+
+                if (word.matches("^[а-яё]+$")) { // Только русские буквы
                     normalForms = russianMorphology.getNormalForms(word);
-                } else { // В остальных случаях считаем его английским
+                } else if (word.matches("^[a-z]+$")) { // Только английские буквы
                     normalForms = englishMorphology.getNormalForms(word);
+                } else {
+                    // Игнорируем символы или смешанные слова
+                    continue;
                 }
 
+                // Добавляем леммы в счетчик
                 for (String lemma : normalForms) {
                     lemmaCounts.put(lemma, lemmaCounts.getOrDefault(lemma, 0) + 1);
                 }
 
-                // Логируем результаты лемматизации
+                // Логирование результатов
                 System.out.println("Слово: " + word + " -> Леммы: " + normalForms);
             }
         } catch (Exception e) {
             System.err.println("Ошибка лемматизации: " + e.getMessage());
         }
+
         return lemmaCounts;
     }
-
-
 
 
     private boolean isSupportedContentType(String url, String contentType) {
@@ -318,24 +339,23 @@ public class PageIndexingService {
             boolean isActive = TransactionSynchronizationManager.isActualTransactionActive();
             System.out.println("Транзакция активна: " + isActive);
 
-            // Подсчёт страниц перед удалением
             long pagesCount = pageRepository.countBySite(site);
             System.out.println("Удаляется " + pagesCount + " страниц с сайта: " + site.getUrl());
 
-            // Удаляем страницы с использованием каскадного удаления, если это настроено
-            pageRepository.deleteAllBySite(site);
+            int deletedIndexes = indexRepository.deleteBySiteId(site.getId());
+            System.out.println("Удалено записей из index: " + deletedIndexes);
 
-            // Логируем информацию
+            int deletedLemmas = lemmaRepository.deleteBySiteId((long) site.getId());
+
+            System.out.println("Удалено записей из lemma: " + deletedLemmas);
+
+            pageRepository.deleteAllBySite(site);
             System.out.println("Удалены страницы для сайта: " + site.getUrl());
 
-            // Удаляем сайт
             siteRepository.delete(site);
-            entityManager.flush(); // Является обязательным для очистки всех каскадных операций
-
-            // Detach the site entity explicitly
+            entityManager.flush();
             entityManager.detach(site);
 
-            // Логирование
             System.out.println("Удалён сайт с URL: " + site.getUrl());
         }
     }
