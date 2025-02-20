@@ -161,9 +161,18 @@ public class PageCrawler extends RecursiveAction {
 
 
     private void saveLemmasAndIndexes(Map<String, Integer> lemmaFrequencies, Page page) {
+        int newLemmas = 0;
+        int updatedLemmas = 0;
+        int savedIndexes = 0;
+
+        StringBuilder lemmaLog = new StringBuilder("Найденные леммы: ");
+
         for (Map.Entry<String, Integer> entry : lemmaFrequencies.entrySet()) {
             String lemmaText = entry.getKey();
             int rank = entry.getValue();
+
+            // Добавляем лемму в лог
+            lemmaLog.append(lemmaText).append(" (").append(rank).append("), ");
 
             // Проверяем, есть ли лемма в базе
             Optional<Lemma> optionalLemma = lemmaRepository.findByLemmaAndSite(lemmaText, page.getSite());
@@ -172,12 +181,14 @@ public class PageCrawler extends RecursiveAction {
             if (optionalLemma.isPresent()) {
                 lemma = optionalLemma.get();
                 lemma.setFrequency(lemma.getFrequency() + 1);
+                updatedLemmas++;
             } else {
                 lemma = new Lemma();
                 lemma.setLemma(lemmaText);
                 lemma.setSite(page.getSite());
                 lemma.setFrequency(1);
                 lemmaRepository.save(lemma);
+                newLemmas++;
             }
 
             // Создаем связь между страницей и леммой
@@ -186,8 +197,17 @@ public class PageCrawler extends RecursiveAction {
             index.setLemma(lemma);
             index.setRank((float) rank);
             indexRepository.save(index);
+            savedIndexes++;
         }
+
+        // Выводим в лог найденные леммы и их количество
+        logger.info(lemmaLog.toString());
+
+        logger.info("Страница '{}' обработана. Новых лемм: {}, Обновленных лемм: {}, Связок (индексов): {}",
+                page.getPath(), newLemmas, updatedLemmas, savedIndexes);
     }
+
+
 
 
 
