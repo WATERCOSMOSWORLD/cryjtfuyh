@@ -7,14 +7,22 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import searchengine.model.Page;
 import searchengine.model.Site;
+import searchengine.model.Lemma;
+import searchengine.model.Index;
 import searchengine.repository.PageRepository;
-
+import searchengine.repository.LemmaRepository;
+import searchengine.repository.IndexRepository;
+import org.apache.lucene.morphology.LuceneMorphology;
+import org.apache.lucene.morphology.russian.RussianLuceneMorphology;
+import org.apache.lucene.morphology.english.EnglishLuceneMorphology;
 import java.io.IOException;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.RecursiveAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.List;
 
 public class PageCrawler extends RecursiveAction {
     private static final Logger logger = LoggerFactory.getLogger(PageCrawler.class);
@@ -23,13 +31,19 @@ public class PageCrawler extends RecursiveAction {
     private final Set<String> visitedUrls;
     private final PageRepository pageRepository;
     private final IndexingService indexingService;
+    private final LemmaRepository lemmaRepository;
+    private final IndexRepository indexRepository;
 
-    public PageCrawler(Site site, String url, Set<String> visitedUrls, PageRepository pageRepository, IndexingService indexingService) {
+
+    public PageCrawler(Site site,LemmaRepository lemmaRepository,IndexRepository indexRepository, String url, Set<String> visitedUrls, PageRepository pageRepository, IndexingService indexingService) {
         this.site = site;
         this.url = url;
         this.visitedUrls = visitedUrls;
         this.pageRepository = pageRepository;
         this.indexingService = indexingService;
+        this.indexRepository = indexRepository;
+        this.lemmaRepository = lemmaRepository;
+
     }
 
     @Override
@@ -68,12 +82,15 @@ public class PageCrawler extends RecursiveAction {
         }
     }
 
+
+
+
     private void handleResponse(Connection.Response response) throws IOException {
         String contentType = response.contentType();
         int statusCode = response.statusCode();
         String path = new URL(url).getPath();
 
-        // Проверка на уникальность страницы
+        // Проверяем, есть ли страница в базе
         if (pageRepository.existsByPathAndSiteId(path, site.getId())) {
             logger.info("Страница {} уже существует. Пропускаем сохранение.", url);
             return;
@@ -89,16 +106,91 @@ public class PageCrawler extends RecursiveAction {
             logger.info("Изображение добавлено: {}", url);
         } else if (contentType != null && contentType.contains("text/html")) {
             Document document = response.parse();
-            page.setContent(document.html());
+            String text = extractText(document);
+            Map<String, Integer> lemmaFrequencies = lemmatizeText(text);
+
+            // Сохраняем страницу
+            page.setContent(text);
+            pageRepository.save(page);
+
+            // Сохраняем леммы и индексы
+            saveLemmasAndIndexes(lemmaFrequencies, page);
+
             logger.info("HTML-страница добавлена: {}", url);
             processLinks(document);
         } else {
             page.setContent("Unhandled content type: " + contentType);
             logger.info("Контент с неизвестным типом добавлен: {}", url);
         }
-
-        pageRepository.save(page);
     }
+
+    private String extractText(Document document) {
+        return document.text();
+    }
+
+
+    private Map<String, Integer> lemmatizeText(String text) throws IOException {
+        Map<String, Integer> lemmaFrequencies = new HashMap<>();
+
+        // Используем LuceneMorphology для русского и английского языков
+        LuceneMorphology russianMorph = new RussianLuceneMorphology();
+        LuceneMorphology englishMorph = new EnglishLuceneMorphology();
+
+        String[] words = text.toLowerCase().split("\\P{L}+"); // Разбиваем текст на слова
+
+        for (String word : words) {
+            if (word.length() < 2) continue; // Игнорируем слишком короткие слова
+
+            List<String> normalForms;
+            if (word.matches("[а-яё]+")) { // Проверяем, русский ли это текст
+                normalForms = russianMorph.getNormalForms(word);
+            } else if (word.matches("[a-z]+")) { // Проверяем, английский ли это текст
+                normalForms = englishMorph.getNormalForms(word);
+            } else {
+                continue; // Пропускаем другие языки
+            }
+
+            for (String lemma : normalForms) {
+                lemmaFrequencies.put(lemma, lemmaFrequencies.getOrDefault(lemma, 0) + 1);
+            }
+        }
+
+        return lemmaFrequencies;
+    }
+
+
+
+    private void saveLemmasAndIndexes(Map<String, Integer> lemmaFrequencies, Page page) {
+        for (Map.Entry<String, Integer> entry : lemmaFrequencies.entrySet()) {
+            String lemmaText = entry.getKey();
+            int rank = entry.getValue();
+
+            // Проверяем, есть ли лемма в базе
+            Optional<Lemma> optionalLemma = lemmaRepository.findByLemmaAndSite(lemmaText, page.getSite());
+
+            Lemma lemma;
+            if (optionalLemma.isPresent()) {
+                lemma = optionalLemma.get();
+                lemma.setFrequency(lemma.getFrequency() + 1);
+            } else {
+                lemma = new Lemma();
+                lemma.setLemma(lemmaText);
+                lemma.setSite(page.getSite());
+                lemma.setFrequency(1);
+                lemmaRepository.save(lemma);
+            }
+
+            // Создаем связь между страницей и леммой
+            Index index = new Index();
+            index.setPage(page);
+            index.setLemma(lemma);
+            index.setRank((float) rank);
+            indexRepository.save(index);
+        }
+    }
+
+
+
 
     private void processLinks(Document document) {
         Elements links = document.select("a[href]");
@@ -138,7 +230,7 @@ public class PageCrawler extends RecursiveAction {
             synchronized (visitedUrls) {
                 if (childPath != null && !visitedUrls.contains(childPath)) {
                     visitedUrls.add(childPath);
-                    subtasks.add(new PageCrawler(site, childUrl, visitedUrls, pageRepository, indexingService));
+                    subtasks.add(new PageCrawler(site, lemmaRepository, indexRepository, childUrl, visitedUrls, pageRepository, indexingService));
                     logger.debug("Добавлена ссылка в обработку: {}", childUrl);
                 } else {
                     logger.debug("Ссылка уже обработана: {}", childUrl);

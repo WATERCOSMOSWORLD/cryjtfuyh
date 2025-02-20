@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.transaction.annotation.Transactional;
 import searchengine.model.Lemma;
+import searchengine.model.Site;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Optional;
 
@@ -20,4 +21,6 @@ public interface LemmaRepository extends JpaRepository<Lemma, Long> {
     @Transactional
     @Query("DELETE FROM Lemma l WHERE l.id NOT IN (SELECT DISTINCT i.lemma.id FROM Index i)")
     int deleteOrphanLemmas();
+
+    Optional<Lemma> findByLemmaAndSite(String lemma, Site site);
 }

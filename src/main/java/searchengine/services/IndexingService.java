@@ -10,6 +10,8 @@ import searchengine.repository.PageRepository;
 import searchengine.repository.SiteRepository;
 import java.time.LocalDateTime;
 import java.util.*;
+import searchengine.repository.LemmaRepository;
+import searchengine.repository.IndexRepository;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
@@ -23,17 +25,19 @@ public class IndexingService {
     private final SitesList sitesList;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
-
+    private final LemmaRepository lemmaRepository;
+    private final IndexRepository indexRepository;
 
     private volatile boolean indexingInProgress = false;
     private ExecutorService executorService;
     private ForkJoinPool forkJoinPool;
 
-    public IndexingService(SitesList sitesList, SiteRepository siteRepository,  PageRepository pageRepository ) {
+    public IndexingService(SitesList sitesList,LemmaRepository lemmaRepository,IndexRepository indexRepository, SiteRepository siteRepository,  PageRepository pageRepository ) {
         this.sitesList = sitesList;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
-
+        this.indexRepository = indexRepository;
+        this.lemmaRepository = lemmaRepository;
 
     }
 
@@ -131,11 +135,20 @@ public class IndexingService {
     private void crawlAndIndexPages(searchengine.model.Site site, String startUrl) {
         forkJoinPool = new ForkJoinPool();
         try {
-            forkJoinPool.invoke(new PageCrawler(site, startUrl, new HashSet<>(), pageRepository, this));
+            forkJoinPool.invoke(new PageCrawler(
+                    site,
+                    lemmaRepository,  // передаем LemmaRepository
+                    indexRepository,  // передаем IndexRepository
+                    startUrl,
+                    new HashSet<>(),
+                    pageRepository,
+                    this
+            ));
         } finally {
             forkJoinPool.shutdown();
         }
     }
+
 
     private void deleteSiteData(String siteUrl) {
         searchengine.model.Site site = siteRepository.findByUrl(siteUrl);
