@@ -8,6 +8,7 @@ import searchengine.model.Site;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Optional;
 
+
 public interface LemmaRepository extends JpaRepository<Lemma, Long> {
 
     Optional<Lemma> findByLemma(String lemma);
@@ -23,4 +24,5 @@ public interface LemmaRepository extends JpaRepository<Lemma, Long> {
     int deleteOrphanLemmas();
 
     Optional<Lemma> findByLemmaAndSite(String lemma, Site site);
+
 }

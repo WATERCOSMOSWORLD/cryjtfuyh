@@ -16,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class IndexingService {
@@ -149,15 +150,35 @@ public class IndexingService {
         }
     }
 
-
+    @Transactional
     private void deleteSiteData(String siteUrl) {
         searchengine.model.Site site = siteRepository.findByUrl(siteUrl);
         if (site != null) {
+            Long siteId = (long) site.getId();  // Приведение к Long для LemmaRepository
+
+            // 1. Удаляем все записи из таблицы index (по siteId через page)
+            int indexesDeleted = indexRepository.deleteBySiteId(site.getId());
+
+            // 2. Удаляем все записи из таблицы lemma (по siteId)
+            int lemmasDeleted = lemmaRepository.deleteBySiteId(siteId);
+
+            // 3. Удаляем все страницы, связанные с сайтом
             int pagesDeleted = pageRepository.deleteAllBySiteId(site.getId());
+
+            // 4. Удаляем сам сайт
             siteRepository.delete(site);
+
+            logger.info("Удалено {} записей из таблицы index.", indexesDeleted);
+            logger.info("Удалено {} записей из таблицы lemma.", lemmasDeleted);
             logger.info("Удалено {} записей из таблицы page для сайта {}.", pagesDeleted, siteUrl);
+            logger.info("Сайт {} успешно удален.", siteUrl);
+        } else {
+            logger.warn("Сайт {} не найден в базе данных.", siteUrl);
         }
     }
+
+
+
 
     private void updateSiteStatusToIndexed(searchengine.model.Site site) {
         site.setStatus(IndexingStatus.INDEXED);
